@@ -1,0 +1,25 @@
+/ {
+    aliases {
+        red-pwm-led = &red_led;
+        green-pwm-led = &green_led;
+        blue-pwm-led = &blue_led;
+    };
+
+    pwmleds {
+        compatible = "pwm-leds";
+
+        red_led: red_led {
+            pwms = <&pwm1 0 20000000 0>;
+            label = "io3";
+        };
+
+        green_led: green_led {
+            pwms = <&pwm2 1 20000000 0>;
+            label = "io9";
+        };
+
+        blue_led: blue_led {
+            pwms = <&pwm3 2 20000000 0>;
+        };
+    };
+};
