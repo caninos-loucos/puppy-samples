@@ -1,25 +1,36 @@
 / {
     aliases {
+        button0 = &button_0;
         red-pwm-led = &red_led;
         green-pwm-led = &green_led;
         blue-pwm-led = &blue_led;
     };
 
+    gpio_keys {
+        compatible = "gpio-keys";
+        button_0: button_0 {
+            gpios = <&arduino_header 10 GPIO_ACTIVE_LOW>; // Header pin 4
+        };
+    };
+
     pwmleds {
         compatible = "pwm-leds";
 
+        // 1000000 nanoseconds -> 1KHZ
+
         red_led: red_led {
-            pwms = <&pwm1 0 20000000 0>;
-            label = "io3";
+            pwms = <&pwm1 3 1000000 0>; // Header pin 7
+            label = "io7";
         };
 
         green_led: green_led {
-            pwms = <&pwm2 1 20000000 0>;
+            pwms = <&pwm2 1 1000000 0>; // Header pin 9
             label = "io9";
         };
 
         blue_led: blue_led {
-            pwms = <&pwm3 2 20000000 0>;
+            pwms = <&pwm2 0 1000000 0>; // Header pin 8
+            label = "io8";
         };
     };
 };
