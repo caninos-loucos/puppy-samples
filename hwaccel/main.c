@@ -1,10 +1,9 @@
-#include <stdlib.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/hwaccel.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
-#define BUF_LEN 16
+#define BUF_LEN 32
 
 int len[] = {BUF_LEN};
 
@@ -112,11 +111,11 @@ accel_buffer_t B8 = {
 
 volatile uint32_t out_buf[BUF_LEN];
 
-const struct device *dev = DEVICE_DT_GET_ONE(pulp_udma_filter);
+const struct device *dev = DEVICE_DT_GET_ONE(caninos_puppy_udma_filter);
 
 int main() {
   int ret;
-  // UNSIGNED BUFFERS
+
   for (int i = 0; i < BUF_LEN; i++) {
     Au32_buf[i] = i;
     Bu32_buf[i] = i;
@@ -130,7 +129,6 @@ int main() {
     Bu8_buf[i] = i;
   }
 
-  // SIGNED BUFFERS
   for (int i = 0; i < BUF_LEN; i++) {
     A32_buf[i] = i - BUF_LEN / 2;
     B32_buf[i] = i - BUF_LEN / 2;
@@ -148,19 +146,12 @@ int main() {
 
   accel_hw_caps_t caps;
   ret = accel_query_hw_caps(dev, &caps);
-  if (ret)
-    printk("Could not get HW caps");
-  else {
-    printk("Caps mask: \n\n\tOP: 0x%x\n\n\tFMT: 0x%x\n\n\tCHAN_DIM: %d, N_CHANS: "
-           "%d\n\n",
-           caps.op_caps, caps.fmt_caps, caps.max_chan_dimension,
-           caps.max_input_buffers);
-  }
-
   printk("Setting buffers\n");
 
+  accel_buffer_t *in_bufs[] = {&Au32, &Bu32};
+
   printk("Buffers are:\n");
-  printk("\n\tA: ");
+  printk("\tA: ");
   for (int i = 0; i < BUF_LEN; i++)
     printk("%d ", Au32_buf[i]);
 
@@ -170,8 +161,6 @@ int main() {
 
   printk("\n");
 
-  accel_buffer_t *in_bufs[] = {&Au32, &Bu32};
-
   accel_buffer_t out = {
       .fmt = FMT_UINT32,
       .len = len,
@@ -179,39 +168,158 @@ int main() {
       .buf = (volatile uint32_t *)out_buf,
   };
 
-  ret = accel_set_buffers(dev, in_bufs, 2, &out);
-  // i think the out buf should be a void buffer to avoid creating more structs
+  uint32_t scalar_len[] = {1};
+  uint32_t scalar_value = 2;
+  accel_buffer_t scalar = {
+    .fmt = FMT_UINT32,
+    .len = NULL,
+    .dim = 0,
+    .buf = (volatile uint32_t *)&scalar_value,
+  };
 
-  if (ret) {
-    printk("\nCould not set buffers, error %d\n", ret);
-  } else {
-    printk("\nBuffers set\n");
-  }
+  
+  ret = accel_set_buffers(dev, in_bufs, 2, &out);
 
   printk("Setting Operations\n");
-  // i think the function should be called set_ops to stay in line with
-  // set_buffers and maybe it could just not receive a vector? idk
-  accel_hw_ops_t ops[1] = {HW_OP_SUM};
 
-  ret = accel_configure_ops(dev, ops, 1);
+  // i think the function should be called set_ops to stay in line with set bufs
+  ret = accel_configure_ops(dev, HW_OP_MAC);
 
   if (ret) {
     printk("Could not set ops, error %d\n", ret);
-  } else {
-    printk("ops set\n");
   }
 
   printk("Starting\n");
+
   accel_start(dev);
 
-  printk("Sleeping for a Second\n");
-  k_sleep(K_SECONDS(1));
+  while(accel_check_status(dev) != 0);
 
   printk("Let's see what's inside\n");
 
-  printk("\n\tOUT: ");
+  printk("\tOUT: ");
   for (int i = 0; i < BUF_LEN; i++)
     printk("%d ", out_buf[i]);
+  printk("\n");
+
+  accel_abort(dev);
+
+  printk("\nGood lets try sum\n");
+
+  ret = accel_configure_ops(dev, HW_OP_SUM);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
+
+  accel_abort(dev);
+
+  printk("\nNow lets try square\n");
+
+  ret = accel_configure_ops(dev, HW_OP_MULT);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
+
+  accel_abort(dev);
+
+  printk("\nNow lets try MAC\n");
+
+  ret = accel_configure_ops(dev, HW_OP_SUM);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
+
+  accel_abort(dev);
+  
+  printk("\nNow lets try subtract\n");
+
+  ret = accel_configure_ops(dev, HW_OP_SUB);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
+  
+  accel_abort(dev);
+
+  printk("\nNow lets try Square Sum\n");
+
+  ret = accel_configure_ops(dev, HW_OP_SQUARE_SUM);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
+
+  accel_abort(dev);
+
+  printk("\nNow lets try Square Sub\n");
+  
+  ret = accel_configure_ops(dev, HW_OP_SQUARE_SUB);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
+
+  accel_abort(dev);
+
+  printk("\nLets try mult again\n");
+
+  ret = accel_configure_ops(dev, HW_OP_MULT);
+
+  accel_start(dev);
+
+  while(accel_check_status(dev) != 0);
+
+  printk("Let's see what's inside\n");
+
+  printk("\tOUT: ");
+  for (int i = 0; i < BUF_LEN; i++)
+    printk("%d ", out_buf[i]);
+  printk("\n");
 
   return ret;
 }
