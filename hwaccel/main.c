@@ -1,325 +1,186 @@
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/hwaccel.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
 
-#define BUF_LEN 32
+LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
-int len[] = {BUF_LEN};
+#define BUF_LEN 8
 
-uint32_t Au32_buf[BUF_LEN];
-uint32_t Bu32_buf[BUF_LEN];
+static int len[] = {BUF_LEN};
+static int scalar_len[] = {1};
 
-accel_buffer_t Au32 = {
-    .fmt = FMT_UINT32,
-    .len = len,
-    .dim = 1,
-    .buf = Au32_buf,
-};
+static int32_t Au32_buf[BUF_LEN] = {1, 2, 3, 4, 5, 6, 7, 8};
+static int32_t Bu32_buf[BUF_LEN] = {11, 12, 13, 14, 15, 16, 17, 18};
+static int32_t Cu32_buf[BUF_LEN] = {21, 22, 23, 24, 25, 26, 27, 28};
 
-accel_buffer_t Bu32 = {
-    .fmt = FMT_UINT32,
-    .len = len,
-    .dim = 1,
-    .buf = Bu32_buf,
-};
+static accel_buffer_t Au32 = {
+		.fmt = FMT_INT32, .len = len, .dim = 1, .buf = Au32_buf};
+static accel_buffer_t Bu32 = {
+		.fmt = FMT_INT32, .len = len, .dim = 1, .buf = Bu32_buf};
+static accel_buffer_t Cu32 = {
+		.fmt = FMT_INT32, .len = len, .dim = 1, .buf = Cu32_buf};
 
-uint16_t Au16_buf[BUF_LEN];
-uint16_t Bu16_buf[BUF_LEN];
+/* Scalars used by regsum/regmult/shift ops */
+static uint32_t scalar_value = 5;
+static uint32_t shift_value = 2;
 
-accel_buffer_t Au16 = {
-    .fmt = FMT_UINT16,
-    .len = len,
-    .dim = 1,
-    .buf = Au16_buf,
-};
+static accel_buffer_t scalar = {
+		.fmt = FMT_INT32, .len = scalar_len, .dim = 0, .buf = &scalar_value};
+static accel_buffer_t shift = {
+		.fmt = FMT_INT32, .len = scalar_len, .dim = 0, .buf = &shift_value};
 
-accel_buffer_t Bu16 = {
-    .fmt = FMT_UINT16,
-    .len = len,
-    .dim = 1,
-    .buf = Bu16_buf,
-};
+static volatile uint32_t out_buf[BUF_LEN];
+static accel_buffer_t out = {
+		.fmt = FMT_INT32, .len = len, .dim = 1, .buf = out_buf};
 
-uint8_t Au8_buf[BUF_LEN];
-uint8_t Bu8_buf[BUF_LEN];
+static const struct {
+	const char *name;
+	accel_buffer_t *buf;
+} buf_table[] = {
+	{"a", &Au32},
+	{"b", &Bu32},
+	{"c", &Cu32},
+	{"scalar", &scalar},
+	{"shift", &shift}};
 
-accel_buffer_t Au8 = {
-    .fmt = FMT_UINT8,
-    .len = len,
-    .dim = 1,
-    .buf = Au8_buf,
-};
+static const struct {
+	const char *name;
+	uint32_t ops;
+	int nbufs;
+} case_table[] = {
+	{"sum", BIT(HW_OP_SUM), 2},
+	{"sub", BIT(HW_OP_SUB), 2},
+	{"mul", BIT(HW_OP_MULT), 2},
+	{"mac", BIT(HW_OP_MULT) | BIT(HW_OP_ACCUMULATE), 2},
+	{"sq", BIT(HW_OP_SQUARE), 1},
+	{"sqsum", BIT(HW_OP_SQUARE) | BIT(HW_OP_SUM), 2},
+	{"sqsub", BIT(HW_OP_SQUARE) | BIT(HW_OP_SUB), 2},
+	{"sqacc", BIT(HW_OP_SQUARE) | BIT(HW_OP_ACCUMULATE), 1},
+	{"sqsumsc", BIT(HW_OP_SQUARE) | BIT(HW_OP_SUM_SCALAR), 2},
+	{"sumsc", BIT(HW_OP_SUM_SCALAR), 2},
+	{"mulsc", BIT(HW_OP_MULT_SCALAR), 2},
+	{"shsc", BIT(HW_OP_SHIFT), 2},
+	{"sumscsq", BIT(HW_OP_SQUARE) | BIT(HW_OP_SUM_SCALAR), 2},
+	{"sumscmul", BIT(HW_OP_MULT) | BIT(HW_OP_SUM_SCALAR), 3},
+	{"mulscsumsc", BIT(HW_OP_MULT_SCALAR) | BIT(HW_OP_SUM_SCALAR), 3},
+	{"mulscsum", BIT(HW_OP_MULT_SCALAR) | BIT(HW_OP_SUM), 3},
+	{"mulscac", BIT(HW_OP_MULT_SCALAR) | BIT(HW_OP_ACCUMULATE), 3},
+	{"mulscsub", BIT(HW_OP_MULT_SCALAR) | BIT(HW_OP_SUB), 3}};
 
-accel_buffer_t Bu8 = {
-    .fmt = FMT_UINT8,
-    .len = len,
-    .dim = 1,
-    .buf = Bu8_buf,
-};
+accel_buffer_t *in[3];
+int nbufs = 0;
 
-int32_t A32_buf[BUF_LEN];
-int32_t B32_buf[BUF_LEN];
+K_SEM_DEFINE(sem, 0, 1);
 
-accel_buffer_t A32 = {
-    .fmt = FMT_INT32,
-    .len = len,
-    .dim = 1,
-    .buf = A32_buf,
-};
-
-accel_buffer_t B32 = {
-    .fmt = FMT_INT32,
-    .len = len,
-    .dim = 1,
-    .buf = B32_buf,
-};
-
-int16_t A16_buf[BUF_LEN];
-int16_t B16_buf[BUF_LEN];
-
-accel_buffer_t A16 = {
-    .fmt = FMT_INT16,
-    .len = len,
-    .dim = 1,
-    .buf = A16_buf,
-};
-
-accel_buffer_t B16 = {
-    .fmt = FMT_INT16,
-    .len = len,
-    .dim = 1,
-    .buf = B16_buf,
-};
-
-int8_t A8_buf[BUF_LEN];
-int8_t B8_buf[BUF_LEN];
-
-accel_buffer_t A8 = {
-    .fmt = FMT_INT8,
-    .len = len,
-    .dim = 1,
-    .buf = A8_buf,
-};
-
-accel_buffer_t B8 = {
-    .fmt = FMT_INT8,
-    .len = len,
-    .dim = 1,
-    .buf = B8_buf,
-};
-
-volatile uint32_t out_buf[BUF_LEN];
+void accel_callback(const struct device *dev, void *user_data) {
+	k_sem_give(&sem);
+}
 
 const struct device *dev = DEVICE_DT_GET_ONE(caninos_puppy_udma_filter);
 
-int main() {
-  int ret;
-
-  for (int i = 0; i < BUF_LEN; i++) {
-    Au32_buf[i] = i;
-    Bu32_buf[i] = i;
-  }
-  for (int i = 0; i < BUF_LEN; i++) {
-    Au16_buf[i] = i;
-    Bu16_buf[i] = i;
-  }
-  for (int i = 0; i < BUF_LEN; i++) {
-    Au8_buf[i] = i;
-    Bu8_buf[i] = i;
-  }
-
-  for (int i = 0; i < BUF_LEN; i++) {
-    A32_buf[i] = i - BUF_LEN / 2;
-    B32_buf[i] = i - BUF_LEN / 2;
-  }
-  for (int i = 0; i < BUF_LEN; i++) {
-    A16_buf[i] = i - BUF_LEN / 2;
-    B16_buf[i] = i - BUF_LEN / 2;
-  }
-  for (int i = 0; i < BUF_LEN; i++) {
-    A8_buf[i] = i - BUF_LEN / 2;
-    B8_buf[i] = i - BUF_LEN / 2;
-  }
-
-  printk("Getting accel caps\n");
-
-  accel_hw_caps_t caps;
-  ret = accel_query_hw_caps(dev, &caps);
-  printk("Setting buffers\n");
-
-  accel_buffer_t *in_bufs[] = {&Au32, &Bu32};
-
-  printk("Buffers are:\n");
-  printk("\tA: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", Au32_buf[i]);
-
-  printk("\n\tB: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", Bu32_buf[i]);
-
-  printk("\n");
-
-  accel_buffer_t out = {
-      .fmt = FMT_UINT32,
-      .len = len,
-      .dim = 1,
-      .buf = (volatile uint32_t *)out_buf,
-  };
-
-  uint32_t scalar_len[] = {1};
-  uint32_t scalar_value = 2;
-  accel_buffer_t scalar = {
-    .fmt = FMT_UINT32,
-    .len = NULL,
-    .dim = 0,
-    .buf = (volatile uint32_t *)&scalar_value,
-  };
-
-  
-  ret = accel_set_buffers(dev, in_bufs, 2, &out);
-
-  printk("Setting Operations\n");
-
-  // i think the function should be called set_ops to stay in line with set bufs
-  ret = accel_configure_ops(dev, HW_OP_MAC);
-
-  if (ret) {
-    printk("Could not set ops, error %d\n", ret);
-  }
-
-  printk("Starting\n");
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  accel_abort(dev);
-
-  printk("\nGood lets try sum\n");
-
-  ret = accel_configure_ops(dev, HW_OP_SUM);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  accel_abort(dev);
-
-  printk("\nNow lets try square\n");
-
-  ret = accel_configure_ops(dev, HW_OP_MULT);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  accel_abort(dev);
-
-  printk("\nNow lets try MAC\n");
-
-  ret = accel_configure_ops(dev, HW_OP_SUM);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  accel_abort(dev);
-  
-  printk("\nNow lets try subtract\n");
-
-  ret = accel_configure_ops(dev, HW_OP_SUB);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-  
-  accel_abort(dev);
-
-  printk("\nNow lets try Square Sum\n");
-
-  ret = accel_configure_ops(dev, HW_OP_SQUARE_SUM);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  accel_abort(dev);
-
-  printk("\nNow lets try Square Sub\n");
-  
-  ret = accel_configure_ops(dev, HW_OP_SQUARE_SUB);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  accel_abort(dev);
-
-  printk("\nLets try mult again\n");
-
-  ret = accel_configure_ops(dev, HW_OP_MULT);
-
-  accel_start(dev);
-
-  while(accel_check_status(dev) != 0);
-
-  printk("Let's see what's inside\n");
-
-  printk("\tOUT: ");
-  for (int i = 0; i < BUF_LEN; i++)
-    printk("%d ", out_buf[i]);
-  printk("\n");
-
-  return ret;
+static int set_buffers(const struct shell *sh, size_t argc, char **argv) {
+
+	for (int i = 0; i < (argc - 1); i++) {
+		in[i] = NULL;
+		ARRAY_FOR_EACH_PTR(buf_table, ptr) {
+			if (strcmp(ptr->name, argv[i + 1]) == 0) {
+				in[i] = ptr->buf;
+				shell_info(sh, "Loading buffer %s", ptr->name);
+			}
+		}
+
+		if (in[i] == NULL) {
+			shell_error(sh, "Invalid Buffer %d", i);
+			return -EINVAL;
+		}
+	}
+	int ret = accel_set_buffers(dev, in, argc - 1, &out);
+
+	if (ret != 0) {
+		shell_error(sh, "Error: %d", ret);
+	}
+
+	return ret;
 }
+
+static int set_ops(const struct shell *sh, size_t argc, char **argv) {
+
+	uint32_t ops = 0;
+
+	ARRAY_FOR_EACH_PTR(case_table, ptr) {
+		if (strcmp(ptr->name, argv[1]) == 0) {
+			ops = ptr->ops;
+			nbufs = ptr->nbufs;
+			shell_info(sh, "Setting OP %s", ptr->name);
+		}
+	}
+
+	if (ops == 0) {
+		shell_error(sh, "Invalid operation");
+		return -EINVAL;
+	}
+
+	int ret = accel_configure_ops(dev, ops);
+	if (ret != 0) {
+		shell_error(sh, "Error: %d", ret);
+	}
+
+	return ret;
+}
+
+static int run(const struct shell *sh, size_t argc, char **argv) {
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	int ret;
+
+	shell_info(sh, "running...");
+	accel_start(dev);
+
+	ret = k_sem_take(&sem, K_SECONDS(1));
+
+	if (ret == 0) {
+		printf(" \nOUT: ");
+		for (int i = 0; i < BUF_LEN; i++)
+			printf("%d ", out_buf[i]);
+		printf("\n");
+
+	} else {
+		shell_error(sh, "No response...");
+	}
+
+	return 0;
+}
+
+int main() {
+	printf("\n\n----------Interactive Filter Accelerator Test----------\n\n");
+	printf("Available modes:\n\t");
+
+	ARRAY_FOR_EACH_PTR(case_table, ptr) { printf("%s ", ptr->name); }
+
+	printf("\n");
+
+	printf("Available Buffers:\n");
+
+	ARRAY_FOR_EACH_PTR(buf_table, ptr) {
+		printf("%s: ", ptr->name);
+		for (int j = 0; j < ptr->buf->dim; j++) {
+			printf("{ ");
+			for (int i = 0; i < ptr->buf->len[j]; i++)
+				printf("%d ", ((uint32_t *)(ptr->buf->buf))[i]);
+			printf("}");
+		}
+		printf("\n");
+	}
+
+	if (accel_set_callback(dev, accel_callback, NULL) < 0) {
+		LOG_ERR("Error setting callback!");
+	}
+}
+
+SHELL_CMD_ARG_REGISTER(op, NULL, "Set ops", set_ops, 2, 0);
+SHELL_CMD_ARG_REGISTER(buf, NULL, "Set buffers", set_buffers, 2, 2);
+SHELL_CMD_REGISTER(run, NULL, "run", run);
